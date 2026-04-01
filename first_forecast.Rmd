@@ -92,6 +92,12 @@ TS_Plot <-
       theme_bw()
 plot(TS_Plot)
 
+# STL decomposition (more robust than decompose() for msts)
+stl_fit <- mstl(ts_test1)
+ 
+cat("\n=== STL Decomposition ===\n")
+plot(stl_fit, main = "STL Decomposition — Trend + Weekly + Annual + Remainder")
+
 #ACF and PACF plots
 par(mfrow=c(1,2))
 ACF_Plot <- Acf(test_data$load_daily, lag = 40, plot = TRUE)
