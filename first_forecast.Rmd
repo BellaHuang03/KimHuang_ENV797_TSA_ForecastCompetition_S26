@@ -21,7 +21,7 @@ load_raw <- read_excel("load.xlsx")
 #Create a hourly data
 #Temperature
 temp_hourly <- temp_raw %>%
-  mutate(date = as.Date(date)) %>%
+  mutate(date = as.POSIXct(date, tz = "UTC")) %>%
   mutate(temp_avg = rowMeans(select(., starts_with("t_ws")), na.rm = TRUE)) %>%
   select(date, hr, temp_avg)
  
@@ -29,7 +29,7 @@ head(temp_hourly)
 
 #Humidity
 humid_hourly <- humid_raw %>%
-  mutate(date = as.Date(date)) %>%
+  mutate(date = as.POSIXct(date, tz = "UTC")) %>%
   mutate(humid_avg = rowMeans(select(., starts_with("rh_ws")), na.rm = TRUE)) %>%
   select(date, hr, humid_avg)
  
@@ -38,7 +38,7 @@ head(humid_hourly)
 #Load
 load_hourly <- load_raw %>%
   filter(!is.na(meter_id)) %>%          
-  mutate(date = as.Date(date)) %>%
+  mutate(date = as.POSIXct(date, tz = "UTC")) %>%
   select(-meter_id) %>%
   pivot_longer(
     cols      = starts_with("h"),
@@ -67,5 +67,6 @@ daily_data <- hourly_data %>%
     .groups    = "drop"
   ) %>%
   arrange(date)
+
 ```
 
