@@ -105,8 +105,129 @@ PACF_Plot <- Pacf(test_data$load_daily, lag = 40)
 par(mfrow=c(1,1))
 ```
 
-5. for Naive model and averaging
+5. Decompose, forecast with seasonal Naive model and averaging
 ```{r}
+decompose_load <- mstl(ts_test1)
+plot(decompose_load, main = "STL Decomposition - Daily Load")
+
+# remainder
+deseasonal_load <- seasadj(decompose_load)
+
+# Plot deseasonal series
+TS_deseas_plot <- 
+  ggplot() +
+  geom_line(aes(x = test_data$date, y = as.numeric(deseasonal_load))) +
+  labs(title = "Deseasonal Daily Load",
+       x     = "Date",
+       y     = "Load (kWh)") +
+  theme_bw()
+plot(TS_deseas_plot)
+```
+```{r}
+# Model 1: Arithmetic Mean
+MEAN_seas <- meanf(y = ts_test1, h = 31)
+checkresiduals(MEAN_seas)
+
+# Model 2: Seasonal Naive
+SNAIVE_seas <- snaive(ts_test1, h = 31)
+checkresiduals(SNAIVE_seas)
+
+# Fitting Models to the Deseasonal Series
+
+# Model 3: Naive on Deseasonal Data
+NAIVE_deseas <- naive(deseasonal_load, h = 31)
+checkresiduals(NAIVE_deseas)
+
+# Model 4: Simple Exponential Smoothing on Deseasonal Data
+SES_deseas <- ses(deseasonal_load, h = 31)
+checkresiduals(SES_deseas)
 
 ```
+Comparison with validation data
+```{r}
+actual_val <- validation_data$load_daily
+rmse <- function(actual, predicted) sqrt(mean((actual - predicted)^2))
+
+rmse_results <- c(
+  MEAN        = rmse(actual_val, as.numeric(MEAN_seas$mean)),
+  SNAIVE      = rmse(actual_val, as.numeric(SNAIVE_seas$mean)),
+  NAIVE_deseas = rmse(actual_val, as.numeric(NAIVE_deseas$mean)),
+  SES_deseas  = rmse(actual_val, as.numeric(SES_deseas$mean))
+)
+
+print(rmse_results)
+
+```
+
+```{r}
+## Retrain SES_deseas on Full Dataset
+full_training_data <- daily_data %>%
+  filter(date >= as.Date("2005-01-01") & date <= as.Date("2011-06-30"))
+
+ts_full_training <- msts(full_training_data$load_daily,
+                         seasonal.periods = c(7, 365.25),
+                         start = c(2005, 1))
+
+# Decompose full training series
+decompose_full <- mstl(ts_full_training)
+deseasonal_full <- seasadj(decompose_full)
+
+# Re-fit SES on deseasonal full training data
+SES_final <- ses(deseasonal_full, h = 31)
+checkresiduals(SES_final)
+
+# Final forecast for July 1–31, 2011
+final_forecast <- data.frame(
+  date     = seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day"),
+  forecast = as.numeric(SES_final$mean)
+)
+
+print(final_forecast)
+```
+```{r}
+## Add Seasonal Component Back to Final Forecast
+# Step 1: Extract seasonal components from decomposition
+seasonal_weekly <- decompose_full[, "Seasonal7"]
+seasonal_annual <- decompose_full[, "Seasonal365.25"]
+
+# Step 2: Find which days in the training data correspond to July
+# so we can match the same seasonal pattern for July 2011
+full_dates <- seq(as.Date("2005-01-01"), as.Date("2011-06-30"), by = "day")
+
+july_idx <- which(format(full_dates, "%m") == "07" & 
+                  format(full_dates, "%d") %in% sprintf("%02d", 1:31))
+
+# Get the LAST July in training data (July 2010) seasonal indices
+last_july_idx <- tail(july_idx, 31)
+
+# Step 3: Extract seasonal values for those 31 days
+seas_weekly_july <- as.numeric(seasonal_weekly)[last_july_idx]
+seas_annual_july <- as.numeric(seasonal_annual)[last_july_idx]
+
+# Step 4: Add back to flat SES forecast
+final_forecast <- data.frame(
+  date           = seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day"),
+  forecast_deseas = as.numeric(SES_final$mean),
+  seas_weekly    = seas_weekly_july,
+  seas_annual    = seas_annual_july,
+  forecast       = as.numeric(SES_final$mean) + seas_weekly_july + seas_annual_july
+)
+
+print(final_forecast)
+
+# Step 5: Plot to verify variation is restored
+ggplot(final_forecast, aes(x = date)) +
+  geom_line(aes(y = forecast_deseas, color = "Flat SES (deseasonal)")) +
+  geom_line(aes(y = forecast,        color = "Final (with seasonality)")) +
+  labs(title = "July 2011 Final Forecast",
+       x = "Date", y = "Load (kWh)", color = "Series") +
+  theme_bw()
+
+# Export for submission
+write.csv(final_forecast %>% select(date, forecast),
+          "Kim_Huang_FirstSubmission.csv", row.names = FALSE)
+
+```
+```
+
 
