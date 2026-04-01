@@ -5,6 +5,9 @@ library(readxl)
 library(dplyr)
 library(tidyr)
 library(lubridate)
+library(forecast)
+library(smooth)
+library(ggplot2)
 ```
 
 2. Import datasets
@@ -67,6 +70,37 @@ daily_data <- hourly_data %>%
     .groups    = "drop"
   ) %>%
   arrange(date)
+
+```
+4. Initial plot - filtering for Jan 2005 to June 2010
+```{r}
+test_data <- daily_data %>%
+  filter(date >= as.Date("2005-01-01") & date <= as.Date("2010-06-30"))
+
+validation_data <- daily_data %>%
+  filter(date >= as.Date("2010-07-01") & date <= as.Date("2010-07-31"))
+
+ts_test1 <- msts(test_data$load_daily,
+                    seasonal.periods = c(7, 365.25),
+                    start = c(2005, 1))
+TS_Plot <- 
+  ggplot(test_data, aes(x = date, y = load_daily)) +
+      geom_line() +
+      labs(title = "Daily Electricity Load - Training Data",
+           x     = "Date",
+           y     = "Load (kWh)") +
+      theme_bw()
+plot(TS_Plot)
+
+#ACF and PACF plots
+par(mfrow=c(1,2))
+ACF_Plot <- Acf(test_data$load_daily, lag = 40, plot = TRUE)
+PACF_Plot <- Pacf(test_data$load_daily, lag = 40)
+par(mfrow=c(1,1))
+```
+
+5. for Naive model and averaging
+```{r}
 
 ```
 
