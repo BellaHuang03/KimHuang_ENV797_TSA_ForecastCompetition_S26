@@ -4,7 +4,10 @@
 
 # Session Data files
 .RData
+<<<<<<< HEAD
 .RDataTmp
+=======
+>>>>>>> 0524384cb2132c0d6e6e786649185c7763c83f34
 
 # User-specific files
 .Ruserdata
@@ -39,6 +42,7 @@ vignettes/*.pdf
 # R Environment Variables
 .Renviron
 
+<<<<<<< HEAD
 # pkgdown site
 docs/
 
@@ -47,3 +51,19 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+=======
+# Rproject files
+*.Rproj
+*_Complete.pdf
+*_KEY.Rmd
+*_KEY.pdf
+*_FIXED.Rmd
+*_TOPOST/
+*_TOPOST.Rmd
+*_TODELETE.Rmd
+*_NOPOST.xlsx
+*_NOPOST.Rmd
+
+#Mac files
+.DS_Store
+>>>>>>> 0524384cb2132c0d6e6e786649185c7763c83f34
