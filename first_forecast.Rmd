@@ -1,3 +1,8 @@
+Forecasting Competition 
+Spring 2026
+Author: Bella Huang & Yeeun Kim
+
+GitHub repository: https://github.com/BellaHuang03/KimHuang_ENV797_TSA_ForecastCompetition_S26
 
 1. Set up
 ```{r}
@@ -21,8 +26,8 @@ load_raw <- read_excel("load.xlsx")
 
 3. Data Wrangling
 ```{r}
-#Create a hourly data
-#Temperature
+# Create a hourly data
+# Temperature
 temp_hourly <- temp_raw %>%
   mutate(date = as.POSIXct(date, tz = "UTC")) %>%
   mutate(temp_avg = rowMeans(select(., starts_with("t_ws")), na.rm = TRUE)) %>%
@@ -30,7 +35,13 @@ temp_hourly <- temp_raw %>%
  
 head(temp_hourly)
 
-#Humidity
+# Aggregate hourly temp to daily mean
+temp_daily <- temp_hourly %>%
+  mutate(date = as.Date(date)) %>%        
+  group_by(date) %>%
+  summarise(temp = mean(temp_avg, na.rm = TRUE))
+
+# Humidity
 humid_hourly <- humid_raw %>%
   mutate(date = as.POSIXct(date, tz = "UTC")) %>%
   mutate(humid_avg = rowMeans(select(., starts_with("rh_ws")), na.rm = TRUE)) %>%
@@ -38,7 +49,13 @@ humid_hourly <- humid_raw %>%
  
 head(humid_hourly)
 
-#Load
+# Aggregate hourly humidity to daily mean
+humid_daily <- humid_hourly %>%
+  mutate(date = as.Date(date)) %>%        
+  group_by(date) %>%
+  summarise(humidity = mean(humid_avg, na.rm = TRUE))
+
+# Load
 load_hourly <- load_raw %>%
   filter(!is.na(meter_id)) %>%          
   mutate(date = as.POSIXct(date, tz = "UTC")) %>%
@@ -54,19 +71,19 @@ load_hourly <- load_raw %>%
  
 head(load_hourly)
 
-#Create an hourly data
+# Create an hourly data
 hourly_data <- load_hourly %>%
   left_join(temp_hourly, by = c("date", "hr")) %>%
   left_join(humid_hourly,   by = c("date", "hr")) %>%
   arrange(date, hr)
 
-#Create a daily data
+# Create a daily data
 daily_data <- hourly_data %>%
   group_by(date) %>%
   summarise(
-    load_daily = sum(load_kwh,  na.rm = TRUE),
+    load_daily = mean(load_kwh,  na.rm = TRUE),
     temp_avg   = mean(temp_avg, na.rm = TRUE),
-    humid_avg     = mean(humid_avg,   na.rm = TRUE),
+    humid_avg  = mean(humid_avg,   na.rm = TRUE),
     .groups    = "drop"
   ) %>%
   arrange(date)
@@ -228,6 +245,121 @@ write.csv(final_forecast %>% select(date, forecast),
           "Kim_Huang_FirstSubmission.csv", row.names = FALSE)
 
 ```
+More models to try: SARIMA & SARIMAX
+```{r}
+# Join exogenous variables back to test and validation dataset
+test_data <- test_data %>%
+  left_join(temp_daily,  by = "date") %>%
+  left_join(humid_daily, by = "date")
+
+validation_data <- validation_data %>%
+  left_join(temp_daily,  by = "date") %>%
+  left_join(humid_daily, by = "date")
+
+# Build xreg matrix
+xreg_train <- cbind(
+  temp     = test_data$temp,
+  humidity = test_data$humidity
+)
+
+xreg_val <- cbind(
+  temp     = validation_data$temp,
+  humidity = validation_data$humidity
+)
 ```
+
+```{r}
+# Model 5: SARIMA on Deseasonal Series
+SARIMA_model <- auto.arima(
+  deseasonal_load,
+  seasonal      = FALSE,
+  stepwise      = FALSE,
+  approximation = FALSE
+)
+checkresiduals(SARIMA_model)
+
+SARIMA_fc <- forecast(SARIMA_model, h = 31)
+
+# Model 6: SARIMAX on Deseasonal Series
+SARIMAX_model <- auto.arima(
+  deseasonal_load,
+  xreg          = xreg_train,
+  seasonal      = FALSE,
+  stepwise      = FALSE,
+  approximation = FALSE
+)
+checkresiduals(SARIMAX_model)
+
+SARIMAX_fc <- forecast(SARIMAX_model, h = 31, xreg = xreg_val)
+```
+Model comparison
+```{r}
+# Updated RMSE Comparison
+rmse_results <- c(
+  MEAN         = rmse(actual_val, as.numeric(MEAN_seas$mean)),
+  SNAIVE       = rmse(actual_val, as.numeric(SNAIVE_seas$mean)),
+  NAIVE_deseas = rmse(actual_val, as.numeric(NAIVE_deseas$mean)),
+  SES_deseas   = rmse(actual_val, as.numeric(SES_deseas$mean)),
+  SARIMA       = rmse(actual_val, as.numeric(SARIMA_fc$mean)),
+  SARIMAX      = rmse(actual_val, as.numeric(SARIMAX_fc$mean))
+)
+
+print(sort(rmse_results))
+```
+
+Apparently, SARIMA model has the lowest RMSE, so we will forecast with SARIMA model.
+
+```{r}
+## Retrain SARIMA on Full Dataset
+full_training_data <- daily_data %>%
+  filter(date >= as.Date("2005-01-01") & date <= as.Date("2011-06-30"))
+
+ts_full_training <- msts(full_training_data$load_daily,
+                         seasonal.periods = c(7, 365.25),
+                         start            = c(2005, 1))
+
+# Decompose full training series
+decompose_full    <- mstl(ts_full_training)
+deseasonal_full   <- seasadj(decompose_full)
+
+# Re-fit SARIMA on deseasonal full training data
+SARIMA_final <- auto.arima(
+  deseasonal_full,
+  seasonal      = FALSE,
+  stepwise      = FALSE,
+  approximation = FALSE
+)
+checkresiduals(SARIMA_final)
+
+# Final deseasonal forecast for July 1-31, 2011
+SARIMA_final_fc <- forecast(SARIMA_final, h = 31)
+```
+
+```{r}
+# Step 5: Add seasonal components back to SARIMA forecast
+final_forecast <- data.frame(
+  date           = seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day"),
+  forecast_deseas = as.numeric(SARIMA_final_fc$mean),
+  seas_weekly     = seas_weekly_july,
+  seas_annual     = seas_annual_july,
+  forecast        = as.numeric(SARIMA_final_fc$mean) + seas_weekly_july + seas_annual_july
+)
+
+print(final_forecast)
+
+# Step 6: Plot to verify variation is restored
+ggplot(final_forecast, aes(x = date)) +
+  geom_line(aes(y = forecast_deseas, color = "Flat SARIMA (deseasonal)")) +
+  geom_line(aes(y = forecast,        color = "Final (with seasonality)")) +
+  labs(title = "July 2011 Final Forecast",
+       x     = "Date", y = "Load (kWh)", color = "Series") +
+  theme_bw()
+
+# Export for submission
+write.csv(final_forecast %>% select(date, forecast),
+          "Kim_Huang_SecondSubmission.csv", row.names = FALSE)
+```
+
+AI statement: AI tool was used to help us change the format of date in our data wrangling process.
 
 
