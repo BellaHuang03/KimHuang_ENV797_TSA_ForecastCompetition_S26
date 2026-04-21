@@ -13,6 +13,7 @@ library(lubridate)
 library(forecast)
 library(smooth)
 library(ggplot2)
+library(tidyverse)
 ```
 
 2. Import datasets
@@ -21,74 +22,208 @@ library(ggplot2)
 temp_raw <- read_excel("temperature.xlsx")
 humid_raw   <- read_excel("relative_humidity.xlsx")
 load_raw <- read_excel("load.xlsx")
-
 ```
 
 3. Data Wrangling
 ```{r}
-# Create a hourly data
-# Temperature
-temp_hourly <- temp_raw %>%
-  mutate(date = as.POSIXct(date, tz = "UTC")) %>%
-  mutate(temp_avg = rowMeans(select(., starts_with("t_ws")), na.rm = TRUE)) %>%
-  select(date, hr, temp_avg)
- 
-head(temp_hourly)
+# Load Daily
+load_daily <- load_raw %>%
+  select(-meter_id) %>%                    
+  rowwise() %>%
+  mutate(daily_load = mean(c_across(h1:h24), na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(date, daily_load) %>%
+  mutate(date = as.Date(date))
 
-# Aggregate hourly temp to daily mean
-temp_daily <- temp_hourly %>%
-  mutate(date = as.Date(date)) %>%        
+# Temperature Daily
+temp_daily <- temp_raw %>%
+  mutate(date = as.Date(date)) %>%
   group_by(date) %>%
-  summarise(temp = mean(temp_avg, na.rm = TRUE))
+  summarise(daily_temp = mean(c_across(t_ws1:t_ws28), na.rm = TRUE))
 
-# Humidity
-humid_hourly <- humid_raw %>%
-  mutate(date = as.POSIXct(date, tz = "UTC")) %>%
-  mutate(humid_avg = rowMeans(select(., starts_with("rh_ws")), na.rm = TRUE)) %>%
-  select(date, hr, humid_avg)
- 
-head(humid_hourly)
-
-# Aggregate hourly humidity to daily mean
-humid_daily <- humid_hourly %>%
-  mutate(date = as.Date(date)) %>%        
+# Humidity Daily
+humid_daily <- humid_raw %>%
+  mutate(date = as.Date(date)) %>%
   group_by(date) %>%
-  summarise(humidity = mean(humid_avg, na.rm = TRUE))
+  summarise(daily_humid = mean(c_across(rh_ws1:rh_ws28), na.rm = TRUE))
 
-# Load
-load_hourly <- load_raw %>%
-  filter(!is.na(meter_id)) %>%          
-  mutate(date = as.POSIXct(date, tz = "UTC")) %>%
-  select(-meter_id) %>%
-  pivot_longer(
-    cols      = starts_with("h"),
-    names_to  = "hr_str",
-    values_to = "load_kwh"
-  ) %>%
-  mutate(hr = as.integer(sub("h", "", hr_str))) %>%  # "h1" → 1
-  select(date, hr, load_kwh) %>%
-  arrange(date, hr)
- 
-head(load_hourly)
+# Daily Data
+daily_data <- load_daily %>%
+  left_join(temp_daily, by = "date") %>%
+  left_join(humid_daily, by = "date")
 
-# Create an hourly data
-hourly_data <- load_hourly %>%
-  left_join(temp_hourly, by = c("date", "hr")) %>%
-  left_join(humid_hourly,   by = c("date", "hr")) %>%
-  arrange(date, hr)
-
-# Create a daily data
-daily_data <- hourly_data %>%
-  group_by(date) %>%
-  summarise(
-    load_daily = mean(load_kwh,  na.rm = TRUE),
-    temp_avg   = mean(temp_avg, na.rm = TRUE),
-    humid_avg  = mean(humid_avg,   na.rm = TRUE),
-    .groups    = "drop"
-  ) %>%
-  arrange(date)
-
+head(daily_data)
+nrow(daily_data) 
 ```
+
+4. Exploratory Data Analysis
+```{r}
+# msts
+ts_load <- msts(daily_data$daily_load, 
+                seasonal.periods = c(7, 365.25),
+                start = c(2005, 1))
+
+# plots
+autoplot(ts_load) +
+  labs(title = "Daily Electricity Demand (2005–2011)",
+       x = "Date", y = "Load (kWh)") +
+  theme_bw()
+
+
+# ACF & PACF
+par(mfrow=c(1,2))
+Acf(daily_data$daily_load, lag.max = 60, main = "ACF - Daily Demand")
+Pacf(daily_data$daily_load, lag.max = 60, main = "PACF - Daily Demand")
+```
+
+5. Training and Test
+```{r}
+n_valid <- 31  
+
+ts_train <- subset(ts_load, end = length(ts_load) - n_valid)
+ts_valid <- subset(ts_load, start = length(ts_load) - n_valid + 1)
+
+length(ts_train)
+length(ts_valid) 
+
+# Model 1: STL + ETS
+fit_stl_ets <- stlf(ts_train, h = n_valid)
+forecast_stl_ets <- forecast(fit_stl_ets, h = n_valid)
+
+accuracy_stl_ets <- accuracy(forecast_stl_ets, ts_valid)
+print(accuracy_stl_ets)
+
+# Model 1 Plot
+autoplot(forecast_stl_ets) +
+  autolayer(ts_valid, series = "Actual") +
+  labs(title = "Model 1: STL + ETS",
+       x = "Date", y = "Demand") +
+  theme_bw()
+
+# Model 2: TBATS
+fit_tbats <- tbats(ts_train)
+forecast_tbats <- forecast(fit_tbats, h = n_valid)
+
+accuracy_tbats <- accuracy(forecast_tbats, ts_valid)
+print(accuracy_tbats)
+
+# Model 2 Plot
+autoplot(forecast_tbats) +
+  autolayer(ts_valid, series = "Actual") +
+  labs(title = "Model 2: TBATS",
+       x = "Date", y = "Demand") +
+  theme_bw()
+
+# Model 3: Fourier + ARIMA
+fourier_train <- fourier(ts_train, K = c(2, 4))
+fourier_valid <- fourier(ts_train, K = c(2, 4), h = n_valid)
+
+fit_fourier <- auto.arima(ts_train, 
+                          xreg = fourier_train,
+                          seasonal = FALSE,  
+                          stepwise = FALSE,
+                          approximation = FALSE)
+
+forecast_fourier <- forecast(fit_fourier, 
+                             xreg = fourier_valid,
+                             h = n_valid)
+
+accuracy_fourier <- accuracy(forecast_fourier, ts_valid)
+print(accuracy_fourier)
+
+# Model 3 Plot
+autoplot(forecast_fourier) +
+  autolayer(ts_valid, series = "Actual") +
+  labs(title = "Model 3: Fourier + ARIMA",
+       x = "Date", y = "Demand") +
+  theme_bw()
+
+# Model 4: NNETAR (Neural Network)
+fit_nnetar <- nnetar(ts_train, P = 1, repeats = 20)
+forecast_nnetar <- forecast(fit_nnetar, h = n_valid)
+
+accuracy_nnetar <- accuracy(forecast_nnetar, ts_valid)
+print(accuracy_nnetar)
+
+# Model 4 Plot
+autoplot(forecast_nnetar) +
+  autolayer(ts_valid, series = "Actual") +
+  labs(title = "Model 4: NNETAR",
+       x = "Date", y = "Demand") +
+  theme_bw()
+
+# Model 5: STL + ARIMA
+fit_stl_arima <- stlm(ts_train, 
+                      s.window = "periodic",
+                      method = "arima")
+
+forecast_stl_arima <- forecast(fit_stl_arima, h = n_valid)
+
+accuracy_stl_arima <- accuracy(forecast_stl_arima, ts_valid)
+print(accuracy_stl_arima)
+
+# Model 5 Plot
+autoplot(forecast_stl_arima) +
+  autolayer(ts_valid, series = "Actual") +
+  labs(title = "Model 5: STL + ARIMA",
+       x = "Date", y = "Demand") +
+  theme_bw()
+```
+
+6. Forecast
+```{r}
+# ══════════════════════════════════════════
+# 6단계: Full Retrain (2005-01-01 ~ 2011-06-30)
+# ══════════════════════════════════════════
+
+# 전체 데이터로 msts 재생성 (ts_load 그대로 사용)
+
+# Best Model: Fourier + ARIMA 
+fourier_full <- fourier(ts_load, K = c(2, 4))
+fourier_future <- fourier(ts_load, K = c(2, 4), h = 31)
+
+fit_fourier_full <- auto.arima(ts_load,
+                               xreg = fourier_full,
+                               seasonal = FALSE,
+                               stepwise = FALSE,
+                               approximation = FALSE)
+
+# Forecast: July 2011 
+forecast_final <- forecast(fit_fourier_full,
+                           xreg = fourier_future,
+                           h = 31)
+
+# Plot
+autoplot(forecast_final) +
+  labs(title = "Final Forecast: July 2011",
+       x = "Date", y = "Demand") +
+  theme_bw()
+
+# ══════════════════════════════════════════
+# 7단계: CSV 제출 파일 생성
+# ══════════════════════════════════════════
+
+# July 2011 날짜 생성
+dates_july2011 <- seq(as.Date("2011-07-01"), 
+                      as.Date("2011-07-31"), 
+                      by = "day")
+
+# 제출 파일 생성
+submission <- data.frame(
+  date = dates_july2011,
+  load = as.numeric(forecast_final$mean)
+)
+
+# 확인
+print(submission)
+
+# CSV 저장
+write.csv(submission, 
+          "submission_fourier_arima.csv", 
+          row.names = FALSE)
+```
+
+
 4. Initial plot - filtering for Jan 2005 to June 2010
 ```{r}
 test_data <- daily_data %>%
@@ -251,8 +386,7 @@ Another try
 ```{r}
 # Forecast with SNAIVE on training data (validation check)
 SNAIVE_seas <- snaive(ts_test1, h = 31)
-```
-
+=======
 More models to try: SARIMA & SARIMAX
 ```{r}
 # Join exogenous variables back to test and validation dataset
