@@ -228,6 +228,30 @@ write.csv(final_forecast %>% select(date, forecast),
           "Kim_Huang_FirstSubmission.csv", row.names = FALSE)
 
 ```
+
+Another try
+```{r}
+# Forecast with SNAIVE on training data (validation check)
+SNAIVE_seas <- snaive(ts_test1, h = 31)
+
+# Re-train on FULL data (2005/01/01 ~ 2011/06/30) for final submission
+full_data <- daily_data %>%
+  filter(date >= as.Date("2005-01-01") & date <= as.Date("2011-06-30"))
+
+ts_full <- msts(full_data$load_daily,
+                seasonal.periods = c(7, 365.25),
+                start = c(2005, 1))
+
+SNAIVE_full <- snaive(ts_full, h = 31)
+
+# Build submission file
+july_2011 <- seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day")
+
+submission <- data.frame(
+  date = as.Date(july_2011),
+  load = round(as.numeric(SNAIVE_full$mean), 2)
+)
+
+write.csv(submission, "submission_second.csv", row.names = FALSE)
+print(submission)
 ```
-
-
