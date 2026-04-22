@@ -172,12 +172,6 @@ autoplot(forecast_stl_arima) +
 
 6. Forecast
 ```{r}
-# ══════════════════════════════════════════
-# 6단계: Full Retrain (2005-01-01 ~ 2011-06-30)
-# ══════════════════════════════════════════
-
-# 전체 데이터로 msts 재생성 (ts_load 그대로 사용)
-
 # Best Model: Fourier + ARIMA 
 fourier_full <- fourier(ts_load, K = c(2, 4))
 fourier_future <- fourier(ts_load, K = c(2, 4), h = 31)
@@ -198,332 +192,162 @@ autoplot(forecast_final) +
   labs(title = "Final Forecast: July 2011",
        x = "Date", y = "Demand") +
   theme_bw()
+```
 
-# ══════════════════════════════════════════
-# 7단계: CSV 제출 파일 생성
-# ══════════════════════════════════════════
+7. Add Temp and Humidity Data
+--> Turned out the results are not the best
+```{r}
+# Add Temp and Humidity Data
+xreg_train <- daily_data %>%
+  slice(1:(nrow(daily_data) - n_valid)) %>%
+  select(daily_temp, daily_humid) %>%
+  as.matrix()
 
-# July 2011 날짜 생성
+xreg_valid <- daily_data %>%
+  slice((nrow(daily_data) - n_valid + 1):nrow(daily_data)) %>%
+  select(daily_temp, daily_humid) %>%
+  as.matrix()
+
+nrow(xreg_train)
+nrow(xreg_valid)
+
+# Modeling: Fourier + ARIMA + Temp/Humidity
+xreg_train_full <- cbind(fourier(ts_train, K = c(2, 4)), xreg_train)
+xreg_valid_full <- cbind(fourier(ts_train, K = c(2, 4), h = n_valid), xreg_valid)
+
+fit_fourier_weather <- auto.arima(ts_train,
+                                  xreg = xreg_train_full,
+                                  seasonal = FALSE,
+                                  stepwise = FALSE,
+                                  approximation = FALSE)
+
+forecast_fourier_weather <- forecast(fit_fourier_weather,
+                                     xreg = xreg_valid_full,
+                                     h = n_valid)
+
+accuracy_weather <- accuracy(forecast_fourier_weather, ts_valid)
+print(accuracy_weather)
+
+# Plot: Fourier + ARIMA + Temp/Humidity
+autoplot(forecast_fourier_weather) +
+  autolayer(ts_valid, series = "Actual") +
+  labs(title = "Fourier + ARIMA + Temp/Humid",
+       x = "Date", y = "Demand") +
+  theme_bw()
+
+```
+
+8.Average of the best models
+```{r}
+# Fourier+ARIMA + TBATS + NNETAR
+ensemble_mean <- (forecast_fourier$mean + 
+                  forecast_tbats$mean + 
+                  forecast_nnetar$mean) / 3
+
+accuracy_ensemble <- accuracy(ensemble_mean, ts_valid)
+print(accuracy_ensemble)
+
+# Modeling
+fourier_full <- fourier(ts_load, K = c(2, 4))
+fourier_future <- fourier(ts_load, K = c(2, 4), h = 31)
+
+fit_fourier_full <- auto.arima(ts_load,
+                               xreg = fourier_full,
+                               seasonal = FALSE,
+                               stepwise = FALSE,
+                               approximation = FALSE)
+
+fit_tbats_full <- tbats(ts_load)
+fit_nnetar_full <- nnetar(ts_load, P = 1, repeats = 20)
+
+# Forecast
+fc_fourier_full <- forecast(fit_fourier_full, xreg = fourier_future, h = 31)
+fc_tbats_full   <- forecast(fit_tbats_full, h = 31)
+fc_nnetar_full  <- forecast(fit_nnetar_full, h = 31)
+
+# Ensemble Average
+ensemble_final <- (fc_fourier_full$mean + 
+                   fc_tbats_full$mean + 
+                   fc_nnetar_full$mean) / 3
+
+
+```
+
+9. Weighted Average of Tbats and Fourier
+--> Turned out this is not the best
+```{r}
+weights3 <- list(
+  c(0.2, 0.8),
+  c(0.1, 0.9),
+  c(0.0, 1.0)
+)
+
+for (w in weights3) {
+  ens <- w[1] * forecast_tbats$mean + w[2] * forecast_fourier$mean
+  mape <- accuracy(ens, ts_valid)["Test set", "MAPE"]
+  cat("TBATS:", w[1], "| Fourier:", w[2], "| MAPE:", round(mape, 4), "\n")
+}
+```
+
+Submission
+```{r}
+# Third Submission
 dates_july2011 <- seq(as.Date("2011-07-01"), 
                       as.Date("2011-07-31"), 
                       by = "day")
 
-# 제출 파일 생성
 submission <- data.frame(
   date = dates_july2011,
   load = as.numeric(forecast_final$mean)
 )
 
-# 확인
 print(submission)
 
-# CSV 저장
+# CSV
 write.csv(submission, 
-          "submission_fourier_arima.csv", 
+          "Kim_Huang_ThirdSubmission.csv", 
           row.names = FALSE)
-```
 
 
-4. Initial plot - filtering for Jan 2005 to June 2010
-```{r}
-test_data <- daily_data %>%
-  filter(date >= as.Date("2005-01-01") & date <= as.Date("2010-06-30"))
-
-validation_data <- daily_data %>%
-  filter(date >= as.Date("2010-07-01") & date <= as.Date("2010-07-31"))
-
-ts_test1 <- msts(test_data$load_daily,
-                    seasonal.periods = c(7, 365.25),
-                    start = c(2005, 1))
-TS_Plot <- 
-  ggplot(test_data, aes(x = date, y = load_daily)) +
-      geom_line() +
-      labs(title = "Daily Electricity Load - Training Data",
-           x     = "Date",
-           y     = "Load (kWh)") +
-      theme_bw()
-plot(TS_Plot)
-
-# STL decomposition (more robust than decompose() for msts)
-stl_fit <- mstl(ts_test1)
- 
-cat("\n=== STL Decomposition ===\n")
-plot(stl_fit, main = "STL Decomposition — Trend + Weekly + Annual + Remainder")
-
-#ACF and PACF plots
-par(mfrow=c(1,2))
-ACF_Plot <- Acf(test_data$load_daily, lag = 40, plot = TRUE)
-PACF_Plot <- Pacf(test_data$load_daily, lag = 40)
-par(mfrow=c(1,1))
-```
-
-5. Decompose, forecast with seasonal Naive model and averaging
-```{r}
-decompose_load <- mstl(ts_test1)
-plot(decompose_load, main = "STL Decomposition - Daily Load")
-
-# remainder
-deseasonal_load <- seasadj(decompose_load)
-
-# Plot deseasonal series
-TS_deseas_plot <- 
-  ggplot() +
-  geom_line(aes(x = test_data$date, y = as.numeric(deseasonal_load))) +
-  labs(title = "Deseasonal Daily Load",
-       x     = "Date",
-       y     = "Load (kWh)") +
-  theme_bw()
-plot(TS_deseas_plot)
-```
-```{r}
-# Model 1: Arithmetic Mean
-MEAN_seas <- meanf(y = ts_test1, h = 31)
-checkresiduals(MEAN_seas)
-
-# Model 2: Seasonal Naive
-SNAIVE_seas <- snaive(ts_test1, h = 31)
-checkresiduals(SNAIVE_seas)
-
-# Fitting Models to the Deseasonal Series
-
-# Model 3: Naive on Deseasonal Data
-NAIVE_deseas <- naive(deseasonal_load, h = 31)
-checkresiduals(NAIVE_deseas)
-
-# Model 4: Simple Exponential Smoothing on Deseasonal Data
-SES_deseas <- ses(deseasonal_load, h = 31)
-checkresiduals(SES_deseas)
-
-```
-Comparison with validation data
-```{r}
-actual_val <- validation_data$load_daily
-rmse <- function(actual, predicted) sqrt(mean((actual - predicted)^2))
-
-rmse_results <- c(
-  MEAN        = rmse(actual_val, as.numeric(MEAN_seas$mean)),
-  SNAIVE      = rmse(actual_val, as.numeric(SNAIVE_seas$mean)),
-  NAIVE_deseas = rmse(actual_val, as.numeric(NAIVE_deseas$mean)),
-  SES_deseas  = rmse(actual_val, as.numeric(SES_deseas$mean))
-)
-
-print(rmse_results)
-
-```
-
-```{r}
-## Retrain SES_deseas on Full Dataset
-full_training_data <- daily_data %>%
-  filter(date >= as.Date("2005-01-01") & date <= as.Date("2011-06-30"))
-
-ts_full_training <- msts(full_training_data$load_daily,
-                         seasonal.periods = c(7, 365.25),
-                         start = c(2005, 1))
-
-# Decompose full training series
-decompose_full <- mstl(ts_full_training)
-deseasonal_full <- seasadj(decompose_full)
-
-# Re-fit SES on deseasonal full training data
-SES_final <- ses(deseasonal_full, h = 31)
-checkresiduals(SES_final)
-
-# Final forecast for July 1–31, 2011
-final_forecast <- data.frame(
-  date     = seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day"),
-  forecast = as.numeric(SES_final$mean)
-)
-
-print(final_forecast)
-```
-```{r}
-## Add Seasonal Component Back to Final Forecast
-# Step 1: Extract seasonal components from decomposition
-seasonal_weekly <- decompose_full[, "Seasonal7"]
-seasonal_annual <- decompose_full[, "Seasonal365.25"]
-
-# Step 2: Find which days in the training data correspond to July
-# so we can match the same seasonal pattern for July 2011
-full_dates <- seq(as.Date("2005-01-01"), as.Date("2011-06-30"), by = "day")
-
-july_idx <- which(format(full_dates, "%m") == "07" & 
-                  format(full_dates, "%d") %in% sprintf("%02d", 1:31))
-
-# Get the LAST July in training data (July 2010) seasonal indices
-last_july_idx <- tail(july_idx, 31)
-
-# Step 3: Extract seasonal values for those 31 days
-seas_weekly_july <- as.numeric(seasonal_weekly)[last_july_idx]
-seas_annual_july <- as.numeric(seasonal_annual)[last_july_idx]
-
-# Step 4: Add back to flat SES forecast
-final_forecast <- data.frame(
-  date           = seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day"),
-  forecast_deseas = as.numeric(SES_final$mean),
-  seas_weekly    = seas_weekly_july,
-  seas_annual    = seas_annual_july,
-  forecast       = as.numeric(SES_final$mean) + seas_weekly_july + seas_annual_july
-)
-
-print(final_forecast)
-
-# Step 5: Plot to verify variation is restored
-ggplot(final_forecast, aes(x = date)) +
-  geom_line(aes(y = forecast_deseas, color = "Flat SES (deseasonal)")) +
-  geom_line(aes(y = forecast,        color = "Final (with seasonality)")) +
-  labs(title = "July 2011 Final Forecast",
-       x = "Date", y = "Load (kWh)", color = "Series") +
-  theme_bw()
-
-# Export for submission
-write.csv(final_forecast %>% select(date, forecast),
-          "Kim_Huang_FirstSubmission.csv", row.names = FALSE)
-
-```
-<<<<<<< HEAD
-
-Another try
-```{r}
-# Forecast with SNAIVE on training data (validation check)
-SNAIVE_seas <- snaive(ts_test1, h = 31)
-=======
-More models to try: SARIMA & SARIMAX
-```{r}
-# Join exogenous variables back to test and validation dataset
-test_data <- test_data %>%
-  left_join(temp_daily,  by = "date") %>%
-  left_join(humid_daily, by = "date")
-
-validation_data <- validation_data %>%
-  left_join(temp_daily,  by = "date") %>%
-  left_join(humid_daily, by = "date")
-
-# Build xreg matrix
-xreg_train <- cbind(
-  temp     = test_data$temp,
-  humidity = test_data$humidity
-)
-
-xreg_val <- cbind(
-  temp     = validation_data$temp,
-  humidity = validation_data$humidity
-)
-```
-
-```{r}
-# Model 5: SARIMA on Deseasonal Series
-SARIMA_model <- auto.arima(
-  deseasonal_load,
-  seasonal      = FALSE,
-  stepwise      = FALSE,
-  approximation = FALSE
-)
-checkresiduals(SARIMA_model)
-
-SARIMA_fc <- forecast(SARIMA_model, h = 31)
-
-# Model 6: SARIMAX on Deseasonal Series
-SARIMAX_model <- auto.arima(
-  deseasonal_load,
-  xreg          = xreg_train,
-  seasonal      = FALSE,
-  stepwise      = FALSE,
-  approximation = FALSE
-)
-checkresiduals(SARIMAX_model)
-
-SARIMAX_fc <- forecast(SARIMAX_model, h = 31, xreg = xreg_val)
-```
-Model comparison
-```{r}
-# Updated RMSE Comparison
-rmse_results <- c(
-  MEAN         = rmse(actual_val, as.numeric(MEAN_seas$mean)),
-  SNAIVE       = rmse(actual_val, as.numeric(SNAIVE_seas$mean)),
-  NAIVE_deseas = rmse(actual_val, as.numeric(NAIVE_deseas$mean)),
-  SES_deseas   = rmse(actual_val, as.numeric(SES_deseas$mean)),
-  SARIMA       = rmse(actual_val, as.numeric(SARIMA_fc$mean)),
-  SARIMAX      = rmse(actual_val, as.numeric(SARIMAX_fc$mean))
-)
-
-print(sort(rmse_results))
-```
-
-Apparently, SARIMA model has the lowest RMSE, so we will forecast with SARIMA model.
-
-```{r}
-## Retrain SARIMA on Full Dataset
-full_training_data <- daily_data %>%
-  filter(date >= as.Date("2005-01-01") & date <= as.Date("2011-06-30"))
-
-ts_full_training <- msts(full_training_data$load_daily,
-                         seasonal.periods = c(7, 365.25),
-                         start            = c(2005, 1))
-
-# Decompose full training series
-decompose_full    <- mstl(ts_full_training)
-deseasonal_full   <- seasadj(decompose_full)
-
-# Re-fit SARIMA on deseasonal full training data
-SARIMA_final <- auto.arima(
-  deseasonal_full,
-  seasonal      = FALSE,
-  stepwise      = FALSE,
-  approximation = FALSE
-)
-checkresiduals(SARIMA_final)
-
-# Final deseasonal forecast for July 1-31, 2011
-SARIMA_final_fc <- forecast(SARIMA_final, h = 31)
-```
-
-```{r}
-# Step 5: Add seasonal components back to SARIMA forecast
-final_forecast <- data.frame(
-  date           = seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day"),
-  forecast_deseas = as.numeric(SARIMA_final_fc$mean),
-  seas_weekly     = seas_weekly_july,
-  seas_annual     = seas_annual_july,
-  forecast        = as.numeric(SARIMA_final_fc$mean) + seas_weekly_july + seas_annual_july
-)
-
-print(final_forecast)
-
-# Step 6: Plot to verify variation is restored
-ggplot(final_forecast, aes(x = date)) +
-  geom_line(aes(y = forecast_deseas, color = "Flat SARIMA (deseasonal)")) +
-  geom_line(aes(y = forecast,        color = "Final (with seasonality)")) +
-  labs(title = "July 2011 Final Forecast",
-       x     = "Date", y = "Load (kWh)", color = "Series") +
-  theme_bw()
-
-# Export for submission
-write.csv(final_forecast %>% select(date, forecast),
-          "Kim_Huang_SecondSubmission.csv", row.names = FALSE)
-```
-
-AI statement: AI tool was used to help us change the format of date in our data wrangling process.
-
->>>>>>> 08bd667d68fa7ce15df76827ec7ce607ed6edbc7
-
-# Re-train on FULL data (2005/01/01 ~ 2011/06/30) for final submission
-full_data <- daily_data %>%
-  filter(date >= as.Date("2005-01-01") & date <= as.Date("2011-06-30"))
-
-ts_full <- msts(full_data$load_daily,
-                seasonal.periods = c(7, 365.25),
-                start = c(2005, 1))
-
-SNAIVE_full <- snaive(ts_full, h = 31)
-
-# Build submission file
-july_2011 <- seq(as.Date("2011-07-01"), as.Date("2011-07-31"), by = "day")
+# Fourth Submission
+dates_july2011 <- seq(as.Date("2011-07-01"), 
+                      as.Date("2011-07-31"), 
+                      by = "day")
 
 submission <- data.frame(
-  date = as.Date(july_2011),
-  load = round(as.numeric(SNAIVE_full$mean), 2)
+  date = dates_july2011,
+  load = as.numeric(ensemble_final)
 )
 
-write.csv(submission, "submission_second.csv", row.names = FALSE)
 print(submission)
+write.csv(submission, "Kim_Huang_FourthSubmission.csv", row.names = FALSE)
+
+
+# Fifth Submission
+dates_july2011 <- seq(as.Date("2011-07-01"), 
+                      as.Date("2011-07-31"), 
+                      by = "day")
+
+submission_tbats <- data.frame(
+  date = dates_july2011,
+  load = as.numeric(fc_tbats_full$mean)
+)
+
+write.csv(submission_tbats, "Kim_Huang_FifthSubmission.csv", row.names = FALSE)
+
+# Sixth Submission
+ensemble_best <- 0.3 * fc_tbats_full$mean + 0.7 * fc_fourier_full$mean
+
+submission_weighted <- data.frame(
+  date = dates_july2011,
+  load = as.numeric(ensemble_best)
+)
+
+write.csv(submission_weighted, "Kim_Huang_SixthSubmission.csv", row.names = FALSE)
 ```
+
+
+
+
+
+
