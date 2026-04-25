@@ -5,20 +5,20 @@ date: "`r Sys.Date()`"
 output: pdf_document
 ---
 
-## 0. Introduction
-This report aims to forecast a residential customer's daily electricity demand for July 2011 as a class competition. We compared multiple time series models, and evaluated their performance using RMSE and MAPE. Hourly load data from January 2005 to June 2011 are used.  
+# 0. Introduction
 
-GitHub repository: https://github.com/BellaHuang03/KimHuang_ENV797_TSA_ForecastCompetition_S26
+This report aims to forecast a residential customer's daily electricity demand for July 2011 as a class competition. We compared multiple time series models, and evaluated their performance using RMSE and MAPE. Hourly load data from January 2005 to June 2011 are used.
 
-## 1. Set up
-# (1) Load packages
-```{r include=FALSE}
+GitHub repository: <https://github.com/BellaHuang03/KimHuang_ENV797_TSA_ForecastCompetition_S26>
+
+# 1. Set up
+```{r,include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, 
                       warning = FALSE, 
                       message = FALSE)
 ```
 
-```{r}
+```{r,include=FALSE}
 library(readxl)
 library(dplyr)
 library(tidyr)
@@ -28,16 +28,25 @@ library(smooth)
 library(ggplot2)
 ```
 
-# (2) Import datasets
-```{r}
+## Import datasets
+
+```{r load-data, include=FALSE}
 #Load Data
 temp_raw <- read_excel("temperature.xlsx")
 humid_raw   <- read_excel("relative_humidity.xlsx")
 load_raw <- read_excel("load.xlsx")
 ```
 
-# (3) Data Wrangling
-```{r}
+```{r preview-data}
+head(temp_raw, 10)
+head(humid_raw, 10)
+head(load_raw, 10)
+```
+
+## Data Wrangling
+The raw temperature, humidity, and load datasets were systematically processed to produce consistent hourly and daily time series for analysis. Timestamps were standardized to POSIXct format, and temperature and humidity readings from multiple weather stations were averaged at the hourly level to obtain representative measures. These hourly series were subsequently aggregated to daily averages. The load dataset was reshaped from wide to long format by transforming hourly columns into a single hour variable, ensuring alignment with the temporal structure of the weather data. The resulting hourly datasets were then merged on common date and hour fields to create a unified dataset. Finally, the merged data were aggregated to the daily level, yielding average daily load, temperature, and humidity variables for subsequent modeling and analysis.
+
+```{r data-wrangling, include=FALSE}
 # Create a hourly data
 # Temperature
 temp_hourly <- temp_raw %>%
@@ -102,9 +111,18 @@ daily_data <- hourly_data %>%
 
 ```
 
-## 2. Explanatory Data Analysis 
-Initial plot - filtering for Jan 2005 to June 2010
-```{r}
+```{r preview-daily-data}
+knitr::kable(head(daily_data, 10), caption = "First 10 rows of the daily dataset")
+```
+
+# 2. Explanatory Data Analysis
+An initial time series plot of daily electricity load from January 2005 to June 2010 reveals clear temporal structure characterized by both trend and seasonality. The series exhibits recurring fluctuations, suggesting the presence of strong periodic components, along with an overall upward movement in later years, indicating a gradual increase in load demand over time.
+
+To further decompose these patterns, an STL (Seasonal-Trend decomposition using Loess) was applied with both weekly and annual seasonal periods. The decomposition confirms a pronounced weekly seasonality, likely reflecting differences between weekdays and weekends, as well as a longer annual cycle associated with seasonal demand variations (e.g., weather-driven consumption). The trend component shows a moderate upward trajectory, particularly toward the end of the training period, while the remainder component appears relatively centered around zero, suggesting that most systematic variation has been captured by the trend and seasonal components.
+
+Autocorrelation analysis provides additional insight into the temporal dependence structure. The ACF plot shows a slow decay, indicating strong persistence and non-stationarity in the series, which is consistent with the observed trend and seasonal effects. The PACF plot displays a significant spike at lag 1 followed by smaller contributions at subsequent lags, suggesting that short-term dependencies are important and that lower-order autoregressive components may be sufficient to capture the serial correlation.
+
+```{r explanatory Data Analysis, echo=FALSE}
 test_data <- daily_data %>%
   filter(date >= as.Date("2005-01-01") & date <= as.Date("2010-06-30"))
 
@@ -141,10 +159,13 @@ PACF_Plot <- Pacf(test_data$load_daily, lag = 40)
 par(mfrow=c(1,1))
 ```
 
+# 3. Top 5 Models
 
-## 3. Top 5 Models
-# (1) Model 1: TBATS
-```{r}
+## (1) Model 1: TBATS
+The TBATS model was selected as an initial forecasting approach due to its ability to handle complex seasonal structures, particularly multiple and non-integer seasonal periods. Given that the electricity load data exhibits both weekly and annual  seasonal trends, TBATS provides a flexible framework by incorporating trigonometric representations of seasonality, Box-Cox transformations, and ARMA error structures.
+
+As shown in the results, the TBATS model is able to reasonably track the underlying level and general direction of the series in the validation period. The forecasts reflect the expected seasonal fluctuations and maintain consistency with the recent historical range of the data. However, some deviations between the predicted and actual values are visible, particularly around periods of higher volatility, suggesting that while the model captures broad seasonal patterns effectively, it may be less responsive to short-term irregular spikes.
+```{r, echo=FALSE}
 ## Training and Test
 n_valid <- 31  
 
@@ -169,8 +190,10 @@ autoplot(forecast_tbats) +
   theme_bw()
 ```
 
-# (2) Model 2: Fourier + ARIMA
-```{r}
+## (2) Model 2: Fourier + ARIMA
+
+
+```{r, echo=FALSE}
 # Model 2: Fourier + ARIMA
 fourier_train <- fourier(ts_train, K = c(2, 4))
 fourier_valid <- fourier(ts_train, K = c(2, 4), h = n_valid)
@@ -196,8 +219,11 @@ autoplot(forecast_fourier) +
   theme_bw()
 ```
 
-# (3) Model 3: NNETAR (Neural Network)
-```{r}
+## (3) Model 3: NNETAR (Neural Network)
+The NNETAR (Neural Network Autoregression) model was implemented to capture potential nonlinear patterns in the electricity load series that may not be fully addressed by traditional linear time series models.
+
+As observed in the results, the NNETAR model is able to follow the general level of the series during the validation period; however, its forecasts appear comparatively smoother and less responsive to sharp spikes in demand. While the model captures the underlying structure to some extent, it tends to underrepresent periods of high volatility and peak load.
+```{r, echo=FALSE}
 # Model 3: NNETAR (Neural Network)
 fit_nnetar <- nnetar(ts_train, P = 1, repeats = 20)
 forecast_nnetar <- forecast(fit_nnetar, h = n_valid)
@@ -213,8 +239,11 @@ autoplot(forecast_nnetar) +
   theme_bw()
 ```
 
-# (4) Model 4: STL + ARIMA
-```{r}
+## (4) Model 4: STL + ARIMA
+The STL + ARIMA approach combines time series decomposition with a parametric forecasting model, where the series is first decomposed into trend and seasonal components using STL, and an ARIMA model is then fitted to the deseasonalized remainder.
+
+Based on the results, the STL + ARIMA model captures the general level of the series reasonably well; however, its forecasts exhibit substantial variability and wide fluctuations, particularly in the prediction interval. In some instances, the model produces unrealistic dips and spikes, indicating instability in capturing short-term dynamics after decomposition.
+```{r, echo=FALSE}
 # Model 4: STL + ARIMA
 fit_stl_arima <- stlm(ts_train, 
                       s.window = "periodic",
@@ -233,8 +262,9 @@ autoplot(forecast_stl_arima) +
   theme_bw()
 ```
 
-# (5) Model 5: Fourier+ARIMA + TBATS + NNETAR
-```{r}
+## (5) Model 5: Fourier+ARIMA + TBATS + NNETAR
+
+```{r, echo=FALSE}
 # Model 5: Fourier+ARIMA + TBATS + NNETAR
 ensemble_mean <- (forecast_fourier$mean + 
                   forecast_tbats$mean + 
@@ -267,9 +297,11 @@ ensemble_final <- (fc_fourier_full$mean +
                    fc_nnetar_full$mean) / 3
 ```
 
-# Model Comparison
+## Model Comparison
+
 Through the comparison, Ensemble model has the lowest RMSE. But when submitting to Kaggle, TBATS is the best forecasting model for the competition.
-```{r}
+
+```{r, echo=FALSE}
 all_accuracy <- rbind(
   accuracy(ensemble_mean,      ts_valid)[1, ],
   accuracy(forecast_tbats,     ts_valid)[2, ],
@@ -289,10 +321,11 @@ all_accuracy[ , c("RMSE", "MAPE")] %>%
                caption = "Model Comparison: Validation Set (July 2010)")
 ```
 
+# Final
 
-## Final
 TBATS achieved the best Kaggle public score (0.0998) and was selected as the final model for forecasting daily electricity demand for July 2011.
-```{r}
+
+```{r, echo=FALSE}
 # Full Retrain on 2005-01-01 ~ 2011-06-30
 fit_tbats_final <- tbats(ts_load)
 
@@ -304,7 +337,9 @@ autoplot(fc_tbats_final) +
   labs(title = "Final Forecast: July 2011 (TBATS)",
        x = "Date", y = "Load (kWh)") +
   theme_bw()
+```
 
+```{r save-output, include=FALSE}
 # CSV
 dates_july2011 <- seq(as.Date("2011-07-01"), 
                       as.Date("2011-07-31"), 
@@ -320,8 +355,12 @@ write.csv(submission_final,
           row.names = FALSE)
 ```
 
-## References: Other Trials
-Please check Rmd file to check all the models that we tried for forecasting.
+# References: Other Trials
+Beyond the five primary models selected for comparison, a range of additional forecasting approaches were explored to better understand the behavior of the series and assess alternative modeling strategies. These included simple baseline methods such as the arithmetic mean and seasonal naïve (SNAIVE) models, as well as naïve and simple exponential smoothing (SES) applied to a deseasonalized series obtained via STL decomposition. These models provided useful reference points and helped evaluate the impact of explicitly removing seasonal components prior to modeling.
+
+More advanced specifications were also considered, including SARIMA and SARIMAX models, with the latter incorporating exogenous variables such as temperature and humidity to account for external drivers of electricity demand. In addition, hybrid approaches such as STL combined with ETS (STL+ETS) and Fourier-based ARIMA models with weather covariates were tested to better capture multiple seasonalities and nonlinear effects. While some of these models demonstrated competitive performance, they were ultimately not selected as primary models due to either lower predictive accuracy on the validation set or reduced stability compared to the final set of chosen models. Please check Rmd file to check all the models that we tried for forecasting.
+
+
 ```{r eval=FALSE, include=FALSE}
 decompose_load <- mstl(ts_test1)
 plot(decompose_load, main = "STL Decomposition - Daily Load")
@@ -359,7 +398,7 @@ checkresiduals(SES_deseas)
 
 ```
 
-```{r}
+```{r eval=FALSE, include=FALSE}
 # Comparison with validation data
 actual_val <- validation_data$load_daily
 rmse <- function(actual, predicted) sqrt(mean((actual - predicted)^2))
@@ -639,6 +678,5 @@ for (w in weights3) {
   cat("TBATS:", w[1], "| Fourier:", w[2], "| MAPE:", round(mape, 4), "\n")
 }
 ```
-
 
 AI statement: AI tool was used to help us change the format of date in our data wrangling process.
